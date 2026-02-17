@@ -1,0 +1,103 @@
+---
+description: Pytest conventions for FastAPI testing
+globs: **/test_*.py,**/tests/**,**/conftest.py
+alwaysApply: false
+---
+
+# Testing Rules
+
+## Test Framework
+
+- Framework: pytest
+- Async support: pytest-asyncio (mandatory for all tests)
+- HTTP client: httpx.AsyncClient (never use TestClient which is sync)
+- Test data: factory_boy or manual factories
+- Coverage: pytest-cov (target 80%+ per module)
+
+## Test Types and Locations
+
+| Type | Location | What it tests |
+|------|----------|--------------|
+| Unit | `tests/unit/` (e.g. `test_order_service.py`) | Service + repository logic in isolation, mocked DB |
+| Integration | `tests/integration/` (e.g. `test_orders.py`) | Real DB, real HTTP via httpx.AsyncClient, transaction-wrapped |
+| Contract | `tests/contract/` (e.g. `test_openapi_compliance.py`) | Response shape vs OpenAPI spec (Schemathesis) |
+
+## Async Testing Requirements
+
+- **All integration tests must be `async def`** with `@pytest.mark.asyncio`
+- Use `httpx.AsyncClient` for HTTP tests — never `TestClient` (which is sync)
+- Use `AsyncSession` for DB operations in tests
+- Example:
+```python
+import pytest
+from httpx import AsyncClient
+
+@pytest.mark.asyncio
+async def test_create_order(client: AsyncClient, db_session: AsyncSession):
+    response = await client.post("/orders", json={...})
+    assert response.status_code == 201
+```
+
+## DB Isolation Strategy
+
+- Each integration test wraps all DB operations in a transaction
+- Transaction is rolled back after the test — no data leaks between tests
+- Create `conftest.py` fixture that provides `db_session` with transaction rollback
+- No manual cleanup code needed
+- Seed data is loaded once before the suite, reset per test via rollback
+
+## Test Naming Convention
+
+- Test file names: `test_*.py` (pytest discovery)
+- Test function names: `test_<description>` (e.g. `test_create_order_success`)
+- Test descriptions must match acceptance criteria text from `contracts.md`
+- Use Given/When/Then structure in docstrings or comments
+
+Example:
+```python
+async def test_create_order_returns_201_with_order_id_when_given_valid_jwt_and_body():
+    """Given: valid order data and JWT token
+    When: POST /orders is called
+    Then: returns 201 with order ID"""
+```
+
+## Required Coverage Per Endpoint
+
+Every endpoint must have tests for:
+- Happy path (correct status code + response body validates against Pydantic schema)
+- Validation failure (400 or 422)
+- Auth failure (401) — added after auth middleware pass
+- Not found (404) — for GET/PUT/DELETE by ID
+- Conflict (409) — if applicable (duplicates, state violations)
+
+## Pytest Fixtures
+
+Create reusable fixtures in `conftest.py`:
+- `db_session`: AsyncSession with transaction rollback
+- `client`: httpx.AsyncClient pointing to FastAPI app
+- `auth_headers`: Dict with Authorization header for authenticated requests
+- Factories for test data (using factory_boy or manual)
+
+## Self-Healing Loop
+
+When tests fail:
+1. Read pytest output and DB state (via Postgres MCP if needed)
+2. Identify root cause: Pydantic schema mismatch, service logic, router formatting, async/await issue
+3. Fix the **implementation**, not the test or spec
+4. Re-run the failing test
+5. Stop and explain if not resolved after 3 attempts
+
+## Contract Testing with Schemathesis
+
+Use Schemathesis for property-based contract testing:
+```python
+import schemathesis
+from app.main import app
+
+schema = schemathesis.from_dict(app.openapi())
+
+@schema.parametrize()
+def test_api_contract(case):
+    response = case.call_asgi(app=app)
+    case.validate_response(response)
+```

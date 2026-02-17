@@ -1,0 +1,55 @@
+---
+description: Core FastAPI project conventions and agentic workflow rules
+alwaysApply: true
+---
+
+# FastAPI Project Conventions
+
+## Stack
+- Language: Python 3.11+
+- Framework: FastAPI
+- Package manager: Poetry (or pip with requirements.txt)
+- Runtime: Python 3.11+
+- Code style: Black (formatting), Ruff (linting)
+- Type checking: mypy (strict mode)
+
+## Project Layout
+```
+app/
+  main.py                # FastAPI app, lifespan, middleware
+  routers/               # APIRouter with @router.post, @router.get
+  services/              # Business logic, calls repository
+  repositories/          # SQLAlchemy queries, async sessions
+  models/                # SQLAlchemy ORM models
+  schemas/               # Pydantic models (request/response)
+  core/
+    config.py            # Settings via pydantic-settings
+    security.py          # JWT auth, password hashing
+    database.py          # AsyncEngine, get_db dependency
+alembic/
+  versions/              # Migration files
+  env.py
+tests/
+  unit/                  # Unit tests (mocked DB)
+  integration/           # Real DB, isolated transactions
+  contract/              # Validates responses vs OpenAPI spec
+openapi.yaml             # Source of truth
+pyproject.toml           # Poetry dependencies
+```
+
+## Agentic Workflow Rules
+
+1. **contracts.md is the single source of truth.** Always read `contracts.md` before making changes to any API endpoint, schema, or data model. Update it whenever contracts or DB schema change.
+2. **openapi.yaml is the spec — never modify it to match bad behaviour.** If implementation doesn't match the spec, fix the implementation.
+3. **Build one endpoint group per session.** Scope each agent session to one route group (e.g. `/orders`). Small scope = clean diffs, easier reviews.
+4. **Commit at checkpoints.** Commit after: spec creation, schema/migration verification, each completed endpoint group, passing test suite.
+
+## Forbidden Patterns
+
+- No raw SQL strings — use SQLAlchemy queries only
+- No business logic in routers — delegate to services
+- No secrets or credentials in code — use environment variables via pydantic-settings
+- No `Any` types — use proper type hints everywhere
+- No sync SQLAlchemy — always use AsyncSession
+- No sync HTTP clients — use httpx.AsyncClient, never requests
+- No skipping linter errors — run ruff and mypy, fix all errors before proceeding

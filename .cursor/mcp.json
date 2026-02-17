@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "apidog": {
+      "command": "npx",
+      "args": ["-y", "apidog-mcp-server", "--project-id", "${APIDOG_PROJECT_ID}"],
+      "env": {
+        "APIDOG_ACCESS_TOKEN": "${APIDOG_ACCESS_TOKEN}"
+      }
+    },
+    "postgres": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres"],
+      "env": {
+        "DATABASE_URL": "${DEV_DATABASE_URL}"
+      }
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+      }
+    }
+  }
+}

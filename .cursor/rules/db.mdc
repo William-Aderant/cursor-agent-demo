@@ -1,0 +1,87 @@
+---
+description: SQLAlchemy 2.0 and Alembic conventions for FastAPI
+globs: **/models/**,**/repositories/**,**/alembic/**,**/core/database.py
+alwaysApply: false
+---
+
+# Database Layer Rules
+
+## ORM / Migration Tool
+
+- ORM: SQLAlchemy 2.0 (declarative style with `mapped_column`)
+- Migration tool: Alembic
+- Use async SQLAlchemy (`AsyncSession`, `AsyncEngine`) — never sync
+
+## SQLAlchemy 2.0 Style
+
+Use modern declarative syntax with type annotations:
+```python
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from datetime import datetime
+
+class Order(Base):
+    __tablename__ = "orders"
+    
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    total: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    user: Mapped["User"] = relationship(back_populates="orders")
+```
+
+## Naming Conventions
+
+- Tables: `snake_case`, plural (e.g. `order_items`)
+- Columns: `snake_case` (e.g. `created_at`, `user_id`)
+- Foreign keys: `<referenced_table_singular>_id` (e.g. `order_id`)
+- Indexes: `idx_<table>_<columns>` (e.g. `idx_orders_user_id`)
+- Migrations: Alembic auto-generates timestamped names
+
+## Schema Rules
+
+- Every table must have a primary key (`id`)
+- Every table must have `created_at` and `updated_at` timestamps
+- All foreign key columns must have an index
+- Add indexes on columns used in WHERE clauses and common query patterns
+- Use soft-delete (`is_deleted` boolean column) unless hard-delete is explicitly required
+- Every migration must have both an `upgrade()` and `downgrade()` function
+
+## Query Patterns
+
+- No N+1 queries — use `selectinload()` or `joinedload()` for eager loading
+- No raw SQL strings — use SQLAlchemy queries only
+- Repository functions return SQLAlchemy model instances, not dicts
+- Keep queries in repository files — services should never import the DB client directly
+- Always use async: `await session.execute(select(Order).where(...))`
+
+## Alembic Migrations
+
+- Generate migration: `alembic revision --autogenerate -m "description"`
+- Review generated migration SQL before applying — Alembic is smart but not perfect
+- Apply migration: `alembic upgrade head`
+- Always verify migration created correct schema before proceeding
+
+## Postgres MCP Verification
+
+After every migration, verify the schema via Postgres MCP:
+1. Query `information_schema.columns` to confirm tables, column types, and nullability
+2. Query `pg_indexes` to confirm all expected indexes exist
+3. Report any discrepancies between the plan and the actual schema
+4. Do NOT proceed to application code until schema is verified
+
+## Database Connection
+
+Use async SQLAlchemy with dependency injection:
+```python
+# app/core/database.py
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+
+engine = create_async_engine(DATABASE_URL)
+async_session_maker = async_sessionmaker(engine, class_=AsyncSession)
+
+async def get_db() -> AsyncSession:
+    async with async_session_maker() as session:
+        yield session
+```
