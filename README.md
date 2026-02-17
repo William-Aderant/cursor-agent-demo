@@ -31,8 +31,34 @@ contracts.md              # Template — single source of truth for API contract
 
 1. **Copy this scaffold** into your new FastAPI project directory
 2. **Set up Python environment**: `poetry install` or `pip install -r requirements.txt`
-3. **Create `.env`** from `.env.example` and add your tokens/credentials
-4. **Start Phase 1** — give the agent your PRD and ask it to generate `openapi.yaml` + `contracts.md`
+3. **Set up local database** (if needed):
+   - PostgreSQL is already installed and configured for this demo
+   - Database name: `cursor_agent_demo`
+   - Use `./scripts/db.sh` to manage the database (start, stop, connect, reset)
+   - Connection string is already in `.env`
+4. **Create `.env`** from `.env.example` and add your tokens/credentials (GitHub token, Apidog if using)
+5. **Start Phase 1** — give the agent your PRD and ask it to generate `openapi.yaml` + `contracts.md`
+
+### Local Database Management
+
+A local PostgreSQL database (`cursor_agent_demo`) has been set up for this demo. Use the helper script:
+
+```bash
+# Start/stop PostgreSQL service
+./scripts/db.sh start
+./scripts/db.sh stop
+
+# Connect to the database
+./scripts/db.sh connect
+
+# Reset the database (⚠️ drops all data)
+./scripts/db.sh reset
+
+# Show connection string
+./scripts/db.sh url
+```
+
+The connection string is configured in `.env` as `DEV_DATABASE_URL`.
 
 ## The 7-Phase Workflow
 

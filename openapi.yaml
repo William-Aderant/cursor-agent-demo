@@ -1,0 +1,1704 @@
+openapi: 3.1.0
+info:
+  title: Court Form PDF Monitor (URL Monitor) API
+  description: |
+    Backend API for the Court Form PDF Monitor (URL Monitor). Monitors court form PDF URLs,
+    detects changes, supports triage and review, and integrates with OpenSearch and S3.
+    Auth uses provider-agnostic OIDC with backend-managed HttpOnly session cookies (BFF pattern).
+  version: 3.1.0
+  contact:
+    name: COE Engineering Team
+
+servers:
+  - url: /api
+    description: API base path
+
+tags:
+  - name: Auth
+    description: Authentication (OIDC/BFF, session cookies)
+  - name: States
+    description: States/jurisdictions
+  - name: Categories
+    description: Hierarchical categories
+  - name: URLs
+    description: Monitored URL management
+  - name: Changes
+    description: Detected changes and triage
+  - name: Triage
+    description: Batch triage operations
+  - name: Monitoring
+    description: Monitoring cycles and progress
+  - name: Metrics
+    description: System metrics and KPIs
+  - name: Audit
+    description: Audit trail and cycles
+  - name: Search
+    description: Document search (OpenSearch)
+  - name: Schedule
+    description: Monitoring schedule configuration
+  - name: Legacy
+    description: Deprecated (Kendra) — remove in v3.1
+
+paths:
+  # --- Auth ---
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in (OIDC token exchange)
+      description: Exchange credentials for a server-managed session. Backend performs OIDC token exchange with Cognito/Okta and sets HttpOnly session cookie.
+      operationId: authLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login successful; Set-Cookie with session cookie
+          headers:
+            Set-Cookie:
+              description: Session cookie (HttpOnly, Secure, SameSite)
+              schema:
+                type: string
+                example: url_monitor_session=...
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionInfo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security: []
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Log out (revoke session)
+      operationId: authLogout
+      responses:
+        '204':
+          description: Session revoked; cookie cleared
+        '200':
+          description: Logged out
+      security: [{ cookieAuth: [] }]
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh session
+      description: Extend or refresh the current session using the session cookie.
+      operationId: authRefresh
+      responses:
+        '200':
+          description: Session refreshed; optional Set-Cookie
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionInfo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security: [{ cookieAuth: [] }]
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Current user/session
+      operationId: authMe
+      responses:
+        '200':
+          description: Current session info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionInfo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+      security: [{ cookieAuth: [] }]
+
+  # --- States ---
+  /states:
+    get:
+      tags: [States]
+      summary: List all states/jurisdictions
+      operationId: listStates
+      responses:
+        '200':
+          description: List of states
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/State'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [States]
+      summary: Create a new state
+      operationId: createState
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StateCreate'
+      responses:
+        '201':
+          description: State created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/State'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /states/{state_id}:
+    get:
+      tags: [States]
+      summary: Get state details
+      operationId: getState
+      parameters:
+        - $ref: '#/components/parameters/StateId'
+      responses:
+        '200':
+          description: State details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/State'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [States]
+      summary: Update state
+      operationId: updateState
+      parameters:
+        - $ref: '#/components/parameters/StateId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StateUpdate'
+      responses:
+        '200':
+          description: State updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/State'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # --- Categories ---
+  /categories:
+    get:
+      tags: [Categories]
+      summary: List all categories
+      operationId: listCategories
+      parameters:
+        - name: state_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+        - name: parent_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: List of categories
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Category'
+    post:
+      tags: [Categories]
+      summary: Create a new category
+      operationId: createCategory
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CategoryCreate'
+      responses:
+        '201':
+          description: Category created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /categories/tree:
+    get:
+      tags: [Categories]
+      summary: Get full category hierarchy tree
+      operationId: getCategoryTree
+      parameters:
+        - name: state_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Category tree
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryTree'
+
+  /categories/{category_id}:
+    get:
+      tags: [Categories]
+      summary: Get category details
+      operationId: getCategory
+      parameters:
+        - $ref: '#/components/parameters/CategoryId'
+      responses:
+        '200':
+          description: Category details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [Categories]
+      summary: Update category
+      operationId: updateCategory
+      parameters:
+        - $ref: '#/components/parameters/CategoryId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CategoryUpdate'
+      responses:
+        '200':
+          description: Category updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Categories]
+      summary: Delete category
+      operationId: deleteCategory
+      parameters:
+        - $ref: '#/components/parameters/CategoryId'
+      responses:
+        '204':
+          description: Category deleted
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Category has children or URLs
+
+  /categories/{category_id}/children:
+    get:
+      tags: [Categories]
+      summary: Get child categories
+      operationId: getCategoryChildren
+      parameters:
+        - $ref: '#/components/parameters/CategoryId'
+      responses:
+        '200':
+          description: Child categories
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Category'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /categories/{category_id}/urls:
+    get:
+      tags: [Categories]
+      summary: Get URLs in a category
+      operationId: getCategoryUrls
+      parameters:
+        - $ref: '#/components/parameters/CategoryId'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: URLs in category (paginated)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UrlListPage'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # --- URL Management ---
+  /urls:
+    get:
+      tags: [URLs]
+      summary: List monitored URLs with pagination and filters
+      operationId: listUrls
+      parameters:
+        - name: state_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+        - name: category_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, inactive, error, archived]
+        - name: is_enabled
+          in: query
+          schema:
+            type: boolean
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Paginated URL list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UrlListPage'
+    post:
+      tags: [URLs]
+      summary: Create a new monitored URL
+      operationId: createUrl
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MonitoredUrlCreate'
+      responses:
+        '201':
+          description: URL created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MonitoredUrl'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /url-filters:
+    get:
+      tags: [URLs]
+      summary: Get available filter options (states, statuses, etc.)
+      operationId: getUrlFilters
+      responses:
+        '200':
+          description: Filter options for URL list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UrlFilters'
+
+  /urls/upload-template:
+    get:
+      tags: [URLs]
+      summary: Download bulk upload template
+      operationId: getUploadTemplate
+      responses:
+        '200':
+          description: CSV/TXT template file
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+            text/plain:
+              schema:
+                type: string
+                format: binary
+
+  /urls/upload-guide:
+    get:
+      tags: [URLs]
+      summary: Get upload format guide
+      operationId: getUploadGuide
+      responses:
+        '200':
+          description: Guide text or JSON
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  format: { type: string }
+                  columns: { type: array }
+                  example: { type: string }
+
+  /urls/bulk-delete:
+    post:
+      tags: [URLs]
+      summary: Bulk delete URLs
+      operationId: bulkDeleteUrls
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url_ids]
+              properties:
+                url_ids:
+                  type: array
+                  items:
+                    type: integer
+                    format: int64
+      responses:
+        '200':
+          description: Deletion result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted: { type: integer }
+                  errors: { type: array, items: { type: string } }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /urls/bulk-upload:
+    post:
+      tags: [URLs]
+      summary: Bulk upload URLs from CSV/TXT
+      operationId: bulkUploadUrls
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Upload result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  created: { type: integer }
+                  skipped: { type: integer }
+                  errors: { type: array, items: { type: string } }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /urls/{url_id}:
+    get:
+      tags: [URLs]
+      summary: Get URL details
+      operationId: getUrl
+      parameters:
+        - $ref: '#/components/parameters/UrlId'
+      responses:
+        '200':
+          description: URL details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MonitoredUrl'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [URLs]
+      summary: Update URL
+      operationId: updateUrl
+      parameters:
+        - $ref: '#/components/parameters/UrlId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MonitoredUrlUpdate'
+      responses:
+        '200':
+          description: URL updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MonitoredUrl'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [URLs]
+      summary: Delete URL
+      operationId: deleteUrl
+      parameters:
+        - $ref: '#/components/parameters/UrlId'
+      responses:
+        '204':
+          description: URL deleted
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /urls/{url_id}/versions:
+    get:
+      tags: [URLs]
+      summary: List PDF versions for a URL
+      operationId: listUrlVersions
+      parameters:
+        - $ref: '#/components/parameters/UrlId'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: List of PDF versions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PDFVersion'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /urls/{url_id}/similar:
+    get:
+      tags: [URLs]
+      summary: Find similar/relocated URLs
+      operationId: getSimilarUrls
+      parameters:
+        - $ref: '#/components/parameters/UrlId'
+      responses:
+        '200':
+          description: Similar URL candidates (e.g. for relocation detection)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SimilarUrlCandidate'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /urls/{url_id}/versions/{version_id}/pdf:
+    get:
+      tags: [URLs]
+      summary: Download PDF file
+      operationId: getVersionPdf
+      parameters:
+        - $ref: '#/components/parameters/UrlId'
+        - $ref: '#/components/parameters/VersionId'
+      responses:
+        '200':
+          description: PDF binary or redirect to presigned URL
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /urls/{url_id}/versions/{version_id}/text:
+    get:
+      tags: [URLs]
+      summary: Get extracted text
+      operationId: getVersionText
+      parameters:
+        - $ref: '#/components/parameters/UrlId'
+        - $ref: '#/components/parameters/VersionId'
+      responses:
+        '200':
+          description: Extracted text content
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  text: { type: string }
+                  version_id: { type: integer, format: int64 }
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /urls/{url_id}/versions/{version_id}/preview:
+    get:
+      tags: [URLs]
+      summary: Preview PDF
+      operationId: getVersionPreview
+      parameters:
+        - $ref: '#/components/parameters/UrlId'
+        - $ref: '#/components/parameters/VersionId'
+      responses:
+        '200':
+          description: Preview representation (e.g. base64 or URL)
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /urls/{url_id}/versions/{version_id}/diff-preview:
+    get:
+      tags: [URLs]
+      summary: Get visual diff preview
+      operationId: getVersionDiffPreview
+      parameters:
+        - $ref: '#/components/parameters/UrlId'
+        - $ref: '#/components/parameters/VersionId'
+        - name: compare_version_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Visual diff data
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /urls/{url_id}/versions/{version_id}/diff-info:
+    get:
+      tags: [URLs]
+      summary: Get diff metadata
+      operationId: getVersionDiffInfo
+      parameters:
+        - $ref: '#/components/parameters/UrlId'
+        - $ref: '#/components/parameters/VersionId'
+        - name: compare_version_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Diff metadata
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /urls/{url_id}/versions/{version_id}/extract-title:
+    post:
+      tags: [URLs]
+      summary: Re-run title extraction
+      operationId: extractTitle
+      parameters:
+        - $ref: '#/components/parameters/UrlId'
+        - $ref: '#/components/parameters/VersionId'
+      responses:
+        '200':
+          description: Extraction result (title, form_number, revision_date)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  title: { type: string }
+                  form_number: { type: string }
+                  revision_date: { type: string, format: date }
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # --- Changes and Triage ---
+  /changes:
+    get:
+      tags: [Changes]
+      summary: List detected changes with filters
+      operationId: listChanges
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, approved, rejected, dismissed]
+        - name: change_type
+          in: query
+          schema:
+            type: string
+        - name: state_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+        - name: classification
+          in: query
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Paginated list of changes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangeListPage'
+
+  /changes-full:
+    get:
+      tags: [Changes]
+      summary: List changes with full detail (including text diffs)
+      operationId: listChangesFull
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: state_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Changes with full detail
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ChangeDetail'
+
+  /changes/{change_id}/download:
+    get:
+      tags: [Changes]
+      summary: Download changed PDF
+      operationId: downloadChangePdf
+      parameters:
+        - name: change_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: PDF file
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /changes/{change_id}/approve:
+    post:
+      tags: [Changes]
+      summary: Approve a change
+      operationId: approveChange
+      parameters:
+        - name: change_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Change approved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangeLog'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /changes/{change_id}/unapprove:
+    post:
+      tags: [Changes]
+      summary: Revert change approval
+      operationId: unapproveChange
+      parameters:
+        - name: change_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Approval reverted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangeLog'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /changes/{change_id}/intervention:
+    post:
+      tags: [Changes]
+      summary: Record manual intervention
+      operationId: recordIntervention
+      parameters:
+        - name: change_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes: { type: string }
+      responses:
+        '200':
+          description: Intervention recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangeLog'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /triage/review/{change_id}:
+    post:
+      tags: [Triage]
+      summary: Review a single change
+      operationId: reviewChange
+      parameters:
+        - name: change_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action: { type: string, enum: [approve, reject, dismiss] }
+                notes: { type: string }
+      responses:
+        '200':
+          description: Review applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangeLog'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /triage/bulk-review:
+    post:
+      tags: [Triage]
+      summary: Bulk review multiple changes
+      operationId: bulkReview
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [change_ids, action]
+              properties:
+                change_ids:
+                  type: array
+                  items:
+                    type: integer
+                    format: int64
+                action:
+                  type: string
+                  enum: [approve, reject, dismiss]
+                notes: { type: string }
+      responses:
+        '200':
+          description: Bulk review result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  processed: { type: integer }
+                  succeeded: { type: integer }
+                  failed: { type: integer }
+                  errors: { type: array, items: { type: string } }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /triage/override/{change_id}:
+    post:
+      tags: [Triage]
+      summary: Override AI classification
+      operationId: overrideClassification
+      parameters:
+        - name: change_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [classification]
+              properties:
+                classification: { type: string }
+                notes: { type: string }
+      responses:
+        '200':
+          description: Classification overridden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangeLog'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /triage/auto-approve-eligible:
+    post:
+      tags: [Triage]
+      summary: Auto-approve eligible changes
+      operationId: autoApproveEligible
+      responses:
+        '200':
+          description: Count of auto-approved changes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  approved: { type: integer }
+
+  /triage/approve-all-pending:
+    post:
+      tags: [Triage]
+      summary: Approve all pending changes
+      operationId: approveAllPending
+      responses:
+        '200':
+          description: Count of approved changes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  approved: { type: integer }
+
+  /triage/dismiss-false-positives:
+    post:
+      tags: [Triage]
+      summary: Dismiss false positives
+      operationId: dismissFalsePositives
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                change_ids:
+                  type: array
+                  items:
+                    type: integer
+                    format: int64
+      responses:
+        '200':
+          description: Count dismissed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dismissed: { type: integer }
+
+  # --- Monitoring ---
+  /monitor/run:
+    post:
+      tags: [Monitoring]
+      summary: Start a monitoring cycle (scheduled)
+      operationId: runMonitor
+      responses:
+        '202':
+          description: Cycle started (async)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cycle_id: { type: integer, format: int64 }
+                  status: { type: string }
+        '409':
+          description: Cycle already running
+
+  /monitor/run-now:
+    post:
+      tags: [Monitoring]
+      summary: Run monitoring cycle immediately
+      operationId: runMonitorNow
+      responses:
+        '202':
+          description: Cycle started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cycle_id: { type: integer, format: int64 }
+                  status: { type: string }
+        '409':
+          description: Cycle already running
+
+  /monitor/progress:
+    get:
+      tags: [Monitoring]
+      summary: Get current monitoring progress (polling)
+      operationId: getMonitorProgress
+      responses:
+        '200':
+          description: Current progress
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MonitorProgress'
+
+  /monitor/progress/stream:
+    get:
+      tags: [Monitoring]
+      summary: SSE stream for real-time monitoring progress
+      description: Server-Sent Events stream. Clients must send credentials (cookies). Events carry progress updates (current URL, total, percentage, status).
+      operationId: getMonitorProgressStream
+      responses:
+        '200':
+          description: SSE stream (text/event-stream)
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE events with progress data
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /status:
+    get:
+      tags: [Monitoring]
+      summary: Get system status
+      operationId: getStatus
+      responses:
+        '200':
+          description: System status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  version: { type: string }
+                  monitoring: { type: object }
+
+  # --- Metrics and Audit ---
+  /metrics:
+    get:
+      tags: [Metrics]
+      summary: Get system metrics
+      operationId: getMetrics
+      responses:
+        '200':
+          description: KPI cards (automation rate, success rate, etc.)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemMetrics'
+
+  /metrics/accuracy:
+    get:
+      tags: [Metrics]
+      summary: Get extraction accuracy metrics
+      operationId: getMetricsAccuracy
+      responses:
+        '200':
+          description: Accuracy metrics
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /metrics/jurisdiction:
+    get:
+      tags: [Metrics]
+      summary: Get per-jurisdiction metrics
+      operationId: getMetricsJurisdiction
+      responses:
+        '200':
+          description: Metrics by state/jurisdiction
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  /aws-calls:
+    get:
+      tags: [Metrics]
+      summary: Get AWS API call counts
+      operationId: getAwsCalls
+      responses:
+        '200':
+          description: Call counts by service
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /audit/cycles:
+    get:
+      tags: [Audit]
+      summary: List monitoring cycles
+      operationId: listAuditCycles
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of cycles
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MonitoringCycle'
+
+  /audit/cycles/{cycle_id}:
+    get:
+      tags: [Audit]
+      summary: Get cycle details
+      operationId: getAuditCycle
+      parameters:
+        - name: cycle_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Cycle details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MonitoringCycle'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /audit/cycles/{cycle_id}/results:
+    get:
+      tags: [Audit]
+      summary: Get per-URL results for a cycle
+      operationId: getAuditCycleResults
+      parameters:
+        - name: cycle_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Cycle URL results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CycleUrlResult'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /audit/stats:
+    get:
+      tags: [Audit]
+      summary: Get audit statistics
+      operationId: getAuditStats
+      responses:
+        '200':
+          description: Audit stats
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /audit/trends:
+    get:
+      tags: [Audit]
+      summary: Get audit trends over time
+      operationId: getAuditTrends
+      parameters:
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Trends data
+          content:
+            application/json:
+              schema:
+                type: array
+
+  # --- Search ---
+  /search:
+    get:
+      tags: [Search]
+      summary: Search indexed documents (OpenSearch)
+      operationId: search
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: state_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+        - name: category_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Search results with relevance scores
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResultPage'
+
+  # --- Schedule ---
+  /schedule:
+    get:
+      tags: [Schedule]
+      summary: Get current schedule configuration
+      operationId: getSchedule
+      responses:
+        '200':
+          description: Schedule config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScheduleConfig'
+    put:
+      tags: [Schedule]
+      summary: Update schedule configuration
+      operationId: updateSchedule
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScheduleConfigUpdate'
+      responses:
+        '200':
+          description: Schedule updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScheduleConfig'
+
+  # --- Legacy (Kendra) — deprecated ---
+  /kendra/index/{version_id}:
+    post:
+      tags: [Legacy]
+      summary: Index a version in Kendra (deprecated)
+      deprecated: true
+      operationId: kendraIndex
+      parameters:
+        - name: version_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Indexing triggered
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /kendra/status:
+    get:
+      tags: [Legacy]
+      summary: Get Kendra index status (deprecated)
+      deprecated: true
+      operationId: kendraStatus
+      responses:
+        '200':
+          description: Kendra status
+          content:
+            application/json:
+              schema:
+                type: object
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: url_monitor_session
+      description: HttpOnly session cookie set by POST /api/auth/login
+
+  parameters:
+    state_id:
+      name: state_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    category_id:
+      name: category_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    url_id:
+      name: url_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    version_id:
+      name: version_id
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSize:
+      name: page_size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  responses:
+    BadRequest:
+      description: Bad request / validation error
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail: { type: string }
+              errors: { type: array }
+    Unauthorized:
+      description: Unauthorized (invalid or missing session)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail: { type: string }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail: { type: string }
+
+  schemas:
+    # Auth
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, format: password }
+    SessionInfo:
+      type: object
+      properties:
+        user_id: { type: string }
+        email: { type: string }
+        expires_at: { type: string, format: date-time }
+
+    # States
+    State:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        abbreviation: { type: string }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    StateCreate:
+      type: object
+      required: [name, abbreviation]
+      properties:
+        name: { type: string }
+        abbreviation: { type: string }
+        is_active: { type: boolean, default: true }
+    StateUpdate:
+      type: object
+      properties:
+        name: { type: string }
+        abbreviation: { type: string }
+        is_active: { type: boolean }
+
+    # Categories
+    Category:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        description: { type: string }
+        parent_category_id: { type: integer, format: int64, nullable: true }
+        state_id: { type: integer, format: int64 }
+        full_path: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CategoryCreate:
+      type: object
+      required: [name, state_id]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        parent_category_id: { type: integer, format: int64, nullable: true }
+        state_id: { type: integer, format: int64 }
+    CategoryUpdate:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string }
+        parent_category_id: { type: integer, format: int64, nullable: true }
+    CategoryTree:
+      type: array
+      items:
+        type: object
+        properties:
+          id: { type: integer, format: int64 }
+          name: { type: string }
+          children: { type: array }
+
+    # URLs
+    MonitoredUrl:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        url: { type: string, format: uri }
+        title: { type: string }
+        form_number: { type: string }
+        revision_date: { type: string, format: date, nullable: true }
+        state_id: { type: integer, format: int64 }
+        category_id: { type: integer, format: int64, nullable: true }
+        is_enabled: { type: boolean }
+        last_checked: { type: string, format: date-time, nullable: true }
+        status: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    MonitoredUrlCreate:
+      type: object
+      required: [url, state_id]
+      properties:
+        url: { type: string, format: uri }
+        title: { type: string }
+        form_number: { type: string }
+        state_id: { type: integer, format: int64 }
+        category_id: { type: integer, format: int64, nullable: true }
+        is_enabled: { type: boolean, default: true }
+    MonitoredUrlUpdate:
+      type: object
+      properties:
+        url: { type: string, format: uri }
+        title: { type: string }
+        form_number: { type: string }
+        state_id: { type: integer, format: int64 }
+        category_id: { type: integer, format: int64, nullable: true }
+        is_enabled: { type: boolean }
+    UrlListPage:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/MonitoredUrl' } }
+        total: { type: integer }
+        page: { type: integer }
+        page_size: { type: integer }
+    UrlFilters:
+      type: object
+      properties:
+        states: { type: array }
+        statuses: { type: array }
+        categories: { type: array }
+    SimilarUrlCandidate:
+      type: object
+      properties:
+        url_id: { type: integer, format: int64 }
+        url: { type: string }
+        similarity_score: { type: number }
+        title: { type: string }
+
+    # PDF versions
+    PDFVersion:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        url_id: { type: integer, format: int64 }
+        version_number: { type: integer }
+        pdf_hash: { type: string }
+        text_hash: { type: string }
+        normalized_hash: { type: string }
+        file_path: { type: string }
+        created_at: { type: string, format: date-time }
+        s3_raw_key: { type: string, nullable: true }
+        s3_normalized_key: { type: string, nullable: true }
+        opensearch_document_id: { type: string, nullable: true }
+        opensearch_indexed_at: { type: string, format: date-time, nullable: true }
+
+    # Changes
+    ChangeLog:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        url_id: { type: integer, format: int64 }
+        version_id: { type: integer, format: int64 }
+        change_type: { type: string }
+        classification: { type: string }
+        confidence: { type: number }
+        reasoning: { type: string }
+        status: { type: string }
+        reviewed_by: { type: string, nullable: true }
+        reviewed_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+    ChangeDetail:
+      allOf:
+        - $ref: '#/components/schemas/ChangeLog'
+        - type: object
+          properties:
+            url: { $ref: '#/components/schemas/MonitoredUrl' }
+            version: { $ref: '#/components/schemas/PDFVersion' }
+            text_diff: { type: string }
+    ChangeListPage:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ChangeLog' } }
+        total: { type: integer }
+        page: { type: integer }
+        page_size: { type: integer }
+
+    # Monitoring
+    MonitorProgress:
+      type: object
+      properties:
+        is_running: { type: boolean }
+        cycle_id: { type: integer, format: int64, nullable: true }
+        current_url: { type: integer }
+        total_urls: { type: integer }
+        percent_complete: { type: number }
+        status: { type: string }
+        started_at: { type: string, format: date-time, nullable: true }
+
+    # Audit
+    MonitoringCycle:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        started_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time, nullable: true }
+        total_urls: { type: integer }
+        changes_detected: { type: integer }
+        errors: { type: integer }
+        status: { type: string }
+    CycleUrlResult:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        cycle_id: { type: integer, format: int64 }
+        url_id: { type: integer, format: int64 }
+        status: { type: string }
+        change_detected: { type: boolean }
+        error_message: { type: string, nullable: true }
+        duration_ms: { type: integer, nullable: true }
+
+    # Metrics
+    SystemMetrics:
+      type: object
+      properties:
+        automation_rate: { type: number }
+        success_rate: { type: number }
+        total_urls: { type: integer }
+        pending_changes: { type: integer }
+
+    # Search
+    SearchResultPage:
+      type: object
+      properties:
+        items: { type: array }
+        total: { type: integer }
+        page: { type: integer }
+        page_size: { type: integer }
+
+    # Schedule
+    ScheduleConfig:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        cron_expression: { type: string }
+        is_enabled: { type: boolean }
+        last_run: { type: string, format: date-time, nullable: true }
+        next_run: { type: string, format: date-time, nullable: true }
+    ScheduleConfigUpdate:
+      type: object
+      properties:
+        cron_expression: { type: string }
+        is_enabled: { type: boolean }
+
+security:
+  - cookieAuth: []
