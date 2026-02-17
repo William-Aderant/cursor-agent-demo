@@ -6,7 +6,6 @@ from typing import Annotated
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import get_settings
-from app.models.base import Base
 
 settings = get_settings()
 engine = create_async_engine(

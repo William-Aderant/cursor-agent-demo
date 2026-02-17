@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
+
+if TYPE_CHECKING:
+    from app.models.monitored_url import MonitoredUrl
+    from app.models.monitoring_cycle import MonitoringCycle
 
 
 class CycleUrlResult(Base):

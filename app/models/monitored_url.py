@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, String, func
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, CreatedUpdatedMixin
+
+if TYPE_CHECKING:
+    from app.models.category import Category
+    from app.models.change_log import ChangeLog
+    from app.models.pdf_version import PDFVersion
+    from app.models.state import State
 
 
 class MonitoredUrl(Base, CreatedUpdatedMixin):
